@@ -1,1 +1,292 @@
-# PAINTERSORSEEKER
+-- ===============================================
+-- ferHacks Paint Or Seek - Mobile ESP + Aimbot + Role Colors (Static Center FOV)
+-- Red = Seeker | Blue = Hider
+-- Owned & Operated in partnership with [@FerHacks]
+-- ===============================================
+
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+    Name = "ferHacks Paint Or Seek",
+    LoadingTitle = "ferHacks Paint Or Seek",
+    LoadingSubtitle = "Mobile ESP + Aimbot + Role Colors (Static FOV) • @FerHacks",
+    ConfigurationSaving = {
+        Enabled = true,
+        FolderName = "ferHacks_Config",
+        FileName = "PaintOrSeek"
+    },
+    Discord = { Enabled = false },
+    KeySystem = false
+})
+
+local MainTab = Window:CreateTab("Main Controls", 4483362458)
+local AimbotTab = Window:CreateTab("Aimbot Settings", 4483362458)
+local SettingsTab = Window:CreateTab("System", 4483362458)
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+local ESP = {}
+local Connections = {}
+
+local EnabledFeatures = {
+    Boxes = true, Names = true, Health = true, Distance = false, Tracers = false,
+    TeamCheck = true,
+    RoleColors = true,
+    RedSeeker = true,
+    BlueHider = true,
+    Aimbot = false
+}
+
+local AimbotSettings = {
+    FOV = 120,
+    Smoothness = 0.35,
+    TargetPart = "Head",
+    HoldToAim = false
+}
+
+-- Static Center FOV Circle (Fixed Position)
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Thickness = 2
+FOVCircle.NumSides = 64
+FOVCircle.Color = Color3.fromRGB(0, 255, 100)
+FOVCircle.Transparency = 0.75
+FOVCircle.Filled = false
+FOVCircle.Visible = false
+
+local function UpdateFOVPosition()
+    if FOVCircle.Visible then
+        FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+        FOVCircle.Radius = AimbotSettings.FOV
+    end
+end
+
+local ESPFolder = Instance.new("Folder")
+ESPFolder.Name = "ferHacks_ESP"
+ESPFolder.Parent = Camera
+
+local function CreateDrawingObject(class, props)
+    local obj = Drawing.new(class)
+    for k, v in pairs(props or {}) do obj[k] = v end
+    return obj
+end
+
+local function GetPlayerRole(player)
+    if not player.Character then return "Unknown" end
+    local character = player.Character
+    local name = player.Name:lower()
+    
+    if name:find("seeker") or name:find("hunter") or (player.Team and player.Team.Name:lower():find("seeker")) or character:FindFirstChild("Seeker") or player:FindFirstChild("Seeker") then
+        return "Seeker"
+    end
+    if name:find("hider") or name:find("painter") or name:find("hide") or (player.Team and player.Team.Name:lower():find("hider")) or character:FindFirstChild("Hider") or player:FindFirstChild("Hider") then
+        return "Hider"
+    end
+    
+    local redParts = 0
+    for _, part in ipairs(character:GetChildren()) do
+        if part:IsA("BasePart") and part.Color.R > 0.7 and part.Color.G < 0.4 and part.Color.B < 0.4 then
+            redParts = redParts + 1
+        end
+    end
+    if redParts >= 2 then return "Seeker" end
+    
+    return "Hider"
+end
+
+local function GetPlayerColor(player)
+    local role = GetPlayerRole(player)
+    if EnabledFeatures.RoleColors then
+        if role == "Seeker" and EnabledFeatures.RedSeeker then
+            return Color3.fromRGB(255, 0, 0)
+        elseif role == "Hider" and EnabledFeatures.BlueHider then
+            return Color3.fromRGB(0, 120, 255)
+        end
+    end
+    if player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team then
+        return Color3.fromRGB(0, 120, 255)
+    end
+    return Color3.fromRGB(255, 30, 30)
+end
+
+local function ShouldShowESP(player)
+    if not EnabledFeatures.TeamCheck then return true end
+    return not (player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team)
+end
+
+local function GetClosestTarget()
+    local closest = nil
+    local shortestDist = math.huge
+    local centerPos = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer or not player.Character then continue end
+        if EnabledFeatures.TeamCheck and player.Team == LocalPlayer.Team then continue end
+        
+        local character = player.Character
+        local targetPart = character:FindFirstChild(AimbotSettings.TargetPart) or character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")
+        if not targetPart then continue end
+        
+        local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
+        if not onScreen then continue end
+        
+        local dist = (Vector2.new(screenPos.X, screenPos.Y) - centerPos).Magnitude
+        if dist < AimbotSettings.FOV and dist < shortestDist then
+            shortestDist = dist
+            closest = targetPart
+        end
+    end
+    return closest
+end
+
+local function UpdateESP()
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer or not player.Character then continue end
+        if not ShouldShowESP(player) then
+            if ESP[player] then
+                for _, obj in pairs(ESP[player]) do if obj then obj.Visible = false end end
+            end
+            continue
+        end
+        
+        local character = player.Character
+        local root = character:FindFirstChild("HumanoidRootPart")
+        local humanoid = character:FindFirstChild("Humanoid")
+        if not root or not humanoid then continue end
+        
+        local screenPos, onScreen = Camera:WorldToViewportPoint(root.Position)
+        if not ESP[player] then
+            ESP[player] = {
+                Box = CreateDrawingObject("Square", {Thickness = 2, Filled = false}),
+                Name = CreateDrawingObject("Text", {Size = 16, Center = true, Outline = true}),
+                HealthBar = CreateDrawingObject("Square", {Thickness = 1, Filled = true}),
+                Distance = CreateDrawingObject("Text", {Size = 14, Center = true, Outline = true}),
+                Tracer = CreateDrawingObject("Line", {Thickness = 1.5})
+            }
+        end
+        
+        local espData = ESP[player]
+        local color = GetPlayerColor(player)
+        local role = GetPlayerRole(player)
+        local top = Camera:WorldToViewportPoint(root.Position + Vector3.new(0,3,0))
+        local bottom = Camera:WorldToViewportPoint(root.Position - Vector3.new(0,3,0))
+        local height = (bottom - top).Y
+        local width = height * 0.6
+        local pos2D = Vector2.new(screenPos.X, screenPos.Y)
+        
+        if onScreen then
+            if EnabledFeatures.Boxes then
+                espData.Box.Visible = true
+                espData.Box.Color = color
+                espData.Box.Size = Vector2.new(width, height)
+                espData.Box.Position = Vector2.new(pos2D.X - width/2, pos2D.Y - height/2)
+            else espData.Box.Visible = false end
+
+            if EnabledFeatures.Names then
+                local roleTag = role == "Seeker" and " [SEEKER]" or " [HIDER]"
+                espData.Name.Visible = true
+                espData.Name.Text = player.Name .. roleTag
+                espData.Name.Color = color
+                espData.Name.Position = Vector2.new(pos2D.X, pos2D.Y - height/2 - 22)
+            else espData.Name.Visible = false end
+
+            if EnabledFeatures.Health and humanoid.Health > 0 then
+                local hp = humanoid.Health / humanoid.MaxHealth
+                espData.HealthBar.Visible = true
+                espData.HealthBar.Color = Color3.fromRGB(255*(1-hp), 255*hp, 0)
+                espData.HealthBar.Size = Vector2.new(4, height * hp)
+                espData.HealthBar.Position = Vector2.new(pos2D.X - width/2 - 8, pos2D.Y - height/2 + height*(1-hp))
+            else espData.HealthBar.Visible = false end
+
+            if EnabledFeatures.Distance then
+                local dist = (root.Position - Camera.CFrame.Position).Magnitude
+                espData.Distance.Visible = true
+                espData.Distance.Text = string.format("%.0f", dist)
+                espData.Distance.Color = color
+                espData.Distance.Position = Vector2.new(pos2D.X, pos2D.Y + height/2 + 6)
+            else espData.Distance.Visible = false end
+
+            if EnabledFeatures.Tracers then
+                espData.Tracer.Visible = true
+                espData.Tracer.Color = color
+                espData.Tracer.From = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y - 40)
+                espData.Tracer.To = pos2D
+            else espData.Tracer.Visible = false end
+        else
+            for _, obj in pairs(espData) do if obj then obj.Visible = false end end
+        end
+    end
+end
+
+local function AimbotLoop()
+    if not EnabledFeatures.Aimbot then return end
+    if AimbotSettings.HoldToAim and not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then return end
+    
+    local targetPart = GetClosestTarget()
+    if targetPart then
+        local targetCFrame = CFrame.lookAt(Camera.CFrame.Position, targetPart.Position)
+        Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, AimbotSettings.Smoothness)
+    end
+end
+
+-- UI Elements
+MainTab:CreateToggle({Name = "Team Check (Only Enemies)", CurrentValue = true, Callback = function(v) EnabledFeatures.TeamCheck = v end})
+MainTab:CreateToggle({Name = "Role-Based Coloring (Red Seeker + Blue Hider)", CurrentValue = true, Callback = function(v) EnabledFeatures.RoleColors = v end})
+MainTab:CreateToggle({Name = "ESP Boxes", CurrentValue = true, Callback = function(v) EnabledFeatures.Boxes = v end})
+MainTab:CreateToggle({Name = "ESP Names", CurrentValue = true, Callback = function(v) EnabledFeatures.Names = v end})
+MainTab:CreateToggle({Name = "ESP Health Bars", CurrentValue = true, Callback = function(v) EnabledFeatures.Health = v end})
+MainTab:CreateToggle({Name = "ESP Distance", CurrentValue = false, Callback = function(v) EnabledFeatures.Distance = v end})
+MainTab:CreateToggle({Name = "ESP Tracers", CurrentValue = false, Callback = function(v) EnabledFeatures.Tracers = v end})
+
+AimbotTab:CreateToggle({
+    Name = "Enable Aimbot",
+    CurrentValue = false,
+    Callback = function(v)
+        EnabledFeatures.Aimbot = v
+        FOVCircle.Visible = v
+        if v then UpdateFOVPosition() end
+    end
+})
+
+AimbotTab:CreateSlider({Name = "FOV Radius", Range = {60, 400}, Increment = 5, CurrentValue = 120, Callback = function(v) 
+    AimbotSettings.FOV = v
+    UpdateFOVPosition()
+end})
+
+AimbotTab:CreateSlider({Name = "Smoothness", Range = {0.1, 0.8}, Increment = 0.05, CurrentValue = 0.35, Callback = function(v) AimbotSettings.Smoothness = v end})
+
+AimbotTab:CreateDropdown({
+    Name = "Target Part",
+    Options = {"Head", "UpperTorso", "HumanoidRootPart"},
+    CurrentOption = {"Head"},
+    Callback = function(opt) AimbotSettings.TargetPart = opt[1] end
+})
+
+AimbotTab:CreateToggle({Name = "Hold RMB to Aim", CurrentValue = false, Callback = function(v) AimbotSettings.HoldToAim = v end})
+
+-- Core Loops
+table.insert(Connections, RunService.RenderStepped:Connect(UpdateESP))
+table.insert(Connections, RunService.RenderStepped:Connect(AimbotLoop))
+table.insert(Connections, RunService.RenderStepped:Connect(UpdateFOVPosition))  -- Keeps circle centered
+
+local function Cleanup()
+    for _, c in ipairs(Connections) do pcall(function() c:Disconnect() end) end
+    for _, data in pairs(ESP) do 
+        for _, obj in pairs(data) do pcall(function() obj:Remove() end) end 
+    end
+    pcall(function() FOVCircle:Remove() end)
+    if ESPFolder then ESPFolder:Destroy() end
+end
+
+SettingsTab:CreateButton({Name = "Destroy Script", Callback = Cleanup})
+
+Rayfield:Notify({
+    Title = "ferHacks Paint Or Seek",
+    Content = "Mobile ESP + Aimbot + Role Colors (Static Center FOV) Loaded",
+    Duration = 6
+})
+
+print("Thanks SUBSCRIBE")
